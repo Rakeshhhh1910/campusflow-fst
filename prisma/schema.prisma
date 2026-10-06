@@ -1,0 +1,288 @@
+// =============================================================================
+// CampusFlow — Prisma Schema
+// Database: PostgreSQL
+// Purpose: Relational business data (users, roles, requests, activities, audit)
+// Course: Fullstack Development with NextJs (DJS23AMD302)
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  MEMBER
+  GUEST
+}
+
+enum RequestStatus {
+  PENDING
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  RESOLVED
+}
+
+enum RequestPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum RequestCategory {
+  MAINTENANCE
+  IT_SUPPORT
+  LIBRARY
+  SPORTS
+  CANTEEN
+  ACADEMIC
+  ADMINISTRATIVE
+  OTHER
+}
+
+enum ActivityCategory {
+  SPORTS
+  CULTURAL
+  TECHNICAL
+  SOCIAL
+  ACADEMIC
+  WORKSHOP
+  SEMINAR
+  OTHER
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  BOUNCED
+  FAILED
+}
+
+enum AuditAction {
+  USER_CREATED
+  USER_UPDATED
+  USER_DELETED
+  REQUEST_CREATED
+  REQUEST_UPDATED
+  REQUEST_STATUS_CHANGED
+  ACTIVITY_CREATED
+  ACTIVITY_UPDATED
+  REGISTRATION_CREATED
+  REGISTRATION_CANCELLED
+  EMAIL_SENT
+  LOGIN
+  LOGOUT
+  UNAUTHORIZED_ACCESS
+}
+
+// ─────────────────────────────────────────────────────────────
+// USER — Core entity; Better Auth manages authentication
+// ─────────────────────────────────────────────────────────────
+model User {
+  id            String   @id @default(cuid())
+  email         String   @unique
+  emailVerified Boolean  @default(false)
+  name          String
+  image         String?
+  role          UserRole @default(MEMBER)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  sessions             Session[]
+  accounts             Account[]
+  serviceRequests      ServiceRequest[]
+  activityRegistrations ActivityRegistration[]
+  auditLogs            AuditLog[]
+  notificationEvents   NotificationEvent[]
+
+  @@index([email])
+  @@index([role])
+  @@map("users")
+}
+
+// ─────────────────────────────────────────────────────────────
+// BETTER AUTH TABLES — Required by Better Auth
+// ─────────────────────────────────────────────────────────────
+model Session {
+  id        String   @id @default(cuid())
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Verification {
+  id         String    @id @default(cuid())
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime? @default(now())
+  updatedAt  DateTime? @updatedAt
+
+  @@map("verifications")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ACTIVITY — Campus events/activities students can register for
+// ─────────────────────────────────────────────────────────────
+model Activity {
+  id          String           @id @default(cuid())
+  title       String
+  description String
+  category    ActivityCategory @default(OTHER)
+  date        DateTime
+  location    String
+  capacity    Int
+  imageUrl    String?
+  isActive    Boolean          @default(true)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  // Relations
+  registrations ActivityRegistration[]
+
+  @@index([category])
+  @@index([date])
+  @@index([isActive])
+  @@map("activities")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ACTIVITY REGISTRATION — Many-to-many between User and Activity
+// ─────────────────────────────────────────────────────────────
+model ActivityRegistration {
+  id           String   @id @default(cuid())
+  userId       String
+  activityId   String
+  registeredAt DateTime @default(now())
+  notes        String?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  activity Activity @relation(fields: [activityId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, activityId]) // one registration per user per activity
+  @@index([userId])
+  @@index([activityId])
+  @@map("activity_registrations")
+}
+
+// ─────────────────────────────────────────────────────────────
+// SERVICE REQUEST — Student submits a campus service request
+// ─────────────────────────────────────────────────────────────
+model ServiceRequest {
+  id          String          @id @default(cuid())
+  title       String
+  category    RequestCategory @default(OTHER)
+  description String
+  priority    RequestPriority @default(MEDIUM)
+  status      RequestStatus   @default(PENDING)
+  userId      String
+  adminNotes  String?
+  resolvedAt  DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  auditLogs          AuditLog[]
+  notificationEvents NotificationEvent[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([priority])
+  @@index([category])
+  @@index([createdAt])
+  @@map("service_requests")
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUDIT LOG — Immutable record of all significant actions
+// ─────────────────────────────────────────────────────────────
+model AuditLog {
+  id               String      @id @default(cuid())
+  action           AuditAction
+  userId           String?
+  resource         String      // e.g., "ServiceRequest", "Activity"
+  resourceId       String?     // ID of the resource
+  metadata         Json?       // Extra context (old values, new values, etc.)
+  ipAddress        String?
+  userAgent        String?
+  serviceRequestId String?
+  createdAt        DateTime    @default(now())
+
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  serviceRequest ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([userId])
+  @@index([resource])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────
+// NOTIFICATION EVENT — Tracks transactional email dispatches
+// ─────────────────────────────────────────────────────────────
+model NotificationEvent {
+  id               String             @id @default(cuid())
+  type             String             // e.g., "SERVICE_REQUEST_CREATED"
+  userId           String
+  status           NotificationStatus @default(PENDING)
+  emailAddress     String
+  resendMessageId  String?            // ID returned by Resend
+  serviceRequestId String?
+  metadata         Json?
+  sentAt           DateTime?
+  deliveredAt      DateTime?
+  bouncedAt        DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceRequest ServiceRequest? @relation(fields: [serviceRequestId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([resendMessageId])
+  @@index([createdAt])
+  @@map("notification_events")
+}
